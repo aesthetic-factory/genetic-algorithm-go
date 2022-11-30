@@ -15,8 +15,8 @@ type Child struct {
 	Attr  Attributes
 }
 
-const ATTR_LEN = 500
-const MAX_POPULATION = 12000
+const ATTR_LEN = 200
+const MAX_POPULATION = 8000
 const THREAD = 20
 
 var g_seed int64 = time.Now().UnixNano()
