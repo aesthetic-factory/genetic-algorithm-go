@@ -8,16 +8,18 @@ import (
 	"time"
 )
 
+const MAX_POPULATION = 10000
+const THREAD = 20
+const ATTR_MAX = 10000
+const ATTR_MIN = -10000
+
 type Attributes []int
 
 type Child struct {
-	Score int
-	Attr  Attributes
+	Score   int
+	Attr    Attributes // range from ATTR_MIN to ATTR_MAX
+	AttrLen int
 }
-
-const ATTR_LEN = 200
-const MAX_POPULATION = 8000
-const THREAD = 20
 
 var g_seed int64 = time.Now().UnixNano()
 
@@ -28,50 +30,76 @@ type FitnessFunction func(child *Child)
 func Mutation(attributeLen int) []int {
 	var result = make([]int, attributeLen)
 	for idx, _ := range result {
-		result[idx] = rand.Intn(400) - 200
+		result[idx] = rand.Intn(ATTR_MAX*2) - ATTR_MAX
 	}
 	return result
 }
 
-func Crossover(attributeLen int, p1 Attributes, p2 Attributes) []int {
+func Crossover(attributeLen int, p1 Attributes, p2 Attributes, mutationProb int, offsetMultiplier int) []int {
+
+	// check args
+	if mutationProb < 0 {
+		mutationProb = 0
+	}
+	if mutationProb > 10 {
+		mutationProb = 10
+	}
+
+	if offsetMultiplier < 1 {
+		offsetMultiplier = 1
+	}
+	if offsetMultiplier > 10 {
+		offsetMultiplier = 10
+	}
+
+	const update_parent_prob_interval = 10
+	const update_offset_prob_interval = 3
 
 	var result = make(Attributes, attributeLen)
 
-	parentProb := rand.Intn(100)
+	// prob range from 0% to 100%
+	parentProb := rand.Intn(100) + mutationProb
 	offsetProb := rand.Intn(100)
 
 	for idx, _ := range result {
-		if idx%15 == 0 {
-			parentProb = rand.Intn(200+parentProb) % 100
+
+		// update probability values
+		if idx%update_parent_prob_interval == 0 {
+			parentProb = rand.Intn(100+parentProb) % 100
+			parentProb += mutationProb
 		}
-		if idx%3 == 0 {
-			offsetProb = rand.Intn(200+offsetProb) % 100
-		}
-		var offset int
-		if offset = 0; offsetProb < 3 {
-			offset = rand.Intn(8) - 4
-		} else if offsetProb < 6 {
-			offset = rand.Intn(4) - 2
+		if idx%update_offset_prob_interval == 0 {
+			offsetProb = rand.Intn(100+offsetProb) % 100
 		}
 
-		if parentProb < 48 {
-			result[idx] = p1[idx] + offset
-		} else if parentProb < 96 {
-			result[idx] = p2[idx] + offset
+		if parentProb > 100 {
+			// Mutation
+			result[idx] = rand.Intn(ATTR_MAX*2) - ATTR_MAX
 		} else {
-			result[idx] = rand.Intn(400) - 200
+			// calc offset
+			var offset int = 0
+			if offsetProb < 10 {
+				offset = offsetMultiplier * (rand.Intn(100) - 50)
+			}
+
+			if parentProb < 50 {
+				// use parent 1
+				result[idx] = p1[idx] + offset
+			} else {
+				// use parent 2
+				result[idx] = p2[idx] + offset
+			}
+
 		}
 	}
 	return result
 }
 
-func GeneratePopulation(calcFitness FitnessFunction) []Child {
+// generate completely random children
+func GeneratePopulation(attributeLen int, calcFitness FitnessFunction) []Child {
 	var population []Child
 	for len(population) < MAX_POPULATION {
-		child := Child{Score: 0, Attr: Mutation(ATTR_LEN)}
-		// for i := range child.Attr {
-		// 	child.Attr[i] = rand.Intn(400) - 200
-		// }
+		child := Child{Score: 0, Attr: Mutation(attributeLen)}
 		calcFitness(&child)
 		population = append(population, child)
 	}
@@ -81,10 +109,10 @@ func GeneratePopulation(calcFitness FitnessFunction) []Child {
 	return population
 }
 
-func BreedPopulationClassic(population []Child, calcFitness FitnessFunction) []Child {
+func BreedPopulationClassic(attributeLen int, population []Child, calcFitness FitnessFunction) []Child {
 	var populationNextGen []Child
 
-	child := Child{Score: 0, Attr: Mutation(ATTR_LEN)}
+	child := Child{Score: 0, Attr: Mutation(attributeLen)}
 	calcFitness(&child)
 	population = append(population, child)
 
@@ -97,7 +125,7 @@ func BreedPopulationClassic(population []Child, calcFitness FitnessFunction) []C
 				if idxA == idxB {
 					continue
 				}
-				child := Child{Score: 0, Attr: Crossover(ATTR_LEN, a.Attr, b.Attr)}
+				child := Child{Score: 0, Attr: Crossover(attributeLen, a.Attr, b.Attr, 3, idxB%10+1)}
 				calcFitness(&child)
 				populationNextGen = append(populationNextGen, child)
 			}
@@ -114,57 +142,63 @@ func CalcPopulationScore(population []Child) int {
 	return Score
 }
 
-func BreedPopulationWorker(population *[]Child, ch chan []Child, calcFitness FitnessFunction, wg *sync.WaitGroup) {
+func BreedPopulationWorker(attributeLen int, population *[]Child, ch chan []Child, calcFitness FitnessFunction, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	var populationNextGen []Child
-	var outputSize = MAX_POPULATION / THREAD
+	var outputSize = MAX_POPULATION/THREAD + 1
 
 	var end = false
 	for !end {
 		for idxA, a := range *population {
 			for idxB, b := range *population {
-				if len(populationNextGen) > outputSize*1 {
+				if len(populationNextGen) > outputSize {
 					end = true
 					break
 				}
 				if idxA == idxB {
 					continue
 				}
-				child := Child{Score: 0, Attr: Crossover(ATTR_LEN, a.Attr, b.Attr)}
+				child := Child{Score: 0, Attr: Crossover(attributeLen, a.Attr, b.Attr, 3, idxB)}
 				calcFitness(&child)
 				populationNextGen = append(populationNextGen, child)
 			}
 		}
-		if len(*population) > 15 {
-			*population = (*population)[0:15]
+
+		// If not enough populationNextGen
+		// breed again using the top population
+		if len(*population) > 20 {
+			*population = (*population)[0:20]
 		}
 	}
 
+	// in this worker thread
+	// calucation score in populationNextGen
+	// do a sort before returning result
 	sort.Slice(populationNextGen, func(i, j int) bool {
 		return populationNextGen[i].Score > populationNextGen[j].Score
 	})
 
-	if len(populationNextGen) > 100 {
-		ch <- populationNextGen[0:100]
+	if len(populationNextGen) > 250 {
+		ch <- populationNextGen[0:250]
 	} else {
 		ch <- populationNextGen
 	}
 
 }
 
-func SpawnWorkers(thread int, population []Child, calcFitness FitnessFunction) []Child {
+func SpawnWorkers(thread int, attributeLen int, population []Child, calcFitness FitnessFunction) []Child {
 	var wg sync.WaitGroup
 	ch := make(chan []Child, thread)
 
-	child := Child{Score: 0, Attr: Mutation(ATTR_LEN)}
+	child := Child{Score: 0, Attr: Mutation(attributeLen)}
 	calcFitness(&child)
 	population = append(population, child)
 
-	// prepare works
+	// prepare workers
 	for k := 0; k < thread; k++ {
 		wg.Add(1)
-		go BreedPopulationWorker(&population, ch, calcFitness, &wg)
+		go BreedPopulationWorker(attributeLen, &population, ch, calcFitness, &wg)
 	}
 	wg.Wait()
 	close(ch)
@@ -176,15 +210,12 @@ func SpawnWorkers(thread int, population []Child, calcFitness FitnessFunction) [
 	return populationNextGen
 }
 
-func BreedPopulation(population []Child, calcFitness FitnessFunction) []Child {
+func BreedPopulation(attributeLen int, population []Child, calcFitness FitnessFunction) []Child {
+
 	g_seed = time.Now().UnixNano()
-	rand.Seed(g_seed)
 
-	// var populationScore = CalcPopulationScore(population)
-
-	var bound = 30 //int(math.Sqrt(MAX_POPULATION)) // 15
-	populationNextGen := SpawnWorkers(THREAD, population[0:bound], calcFitness)
-
+	var bound = 50 // only pick the top 50 in the population
+	populationNextGen := SpawnWorkers(THREAD, attributeLen, population[0:bound], calcFitness)
 	//populationNextGen := BreedPopulationClassic(population[0:bound])
 
 	sort.Slice(populationNextGen, func(i, j int) bool {
@@ -198,23 +229,21 @@ func BreedPopulation(population []Child, calcFitness FitnessFunction) []Child {
 	}
 }
 
-func Task(calcFitness FitnessFunction) {
+func Task(attributeLen int, calcFitness FitnessFunction, targetScore float64, maxStep int) (bool, []Child) {
 	g_seed = time.Now().UnixNano() + int64(rand.Intn(100000))
-	rand.Seed(g_seed)
-	targetScore := ATTR_LEN * 9.95
-	g_population = GeneratePopulation(calcFitness)
+
+	g_population = GeneratePopulation(attributeLen, calcFitness)
 	step := 0
-	for step < 5000 {
+	for step < maxStep {
 		step += 1
-		g_population = BreedPopulation(g_population, calcFitness)
-		if step%10 == 0 {
+		g_population = BreedPopulation(attributeLen, g_population, calcFitness)
+		if step%20 == 0 {
 			fmt.Println("BreedPopulation")
 			fmt.Println("Reach Goal:", step, ", Score: ", g_population[0].Score, "Target score", targetScore)
 		}
 		if float64(g_population[0].Score) >= targetScore {
-			fmt.Println("Reach Goal:", step, ", Score: ", g_population[0].Score)
-			fmt.Println(g_population[0:2])
-			break
+			return true, g_population[0:5]
 		}
 	}
+	return false, g_population[0:5]
 }
