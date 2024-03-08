@@ -9,7 +9,10 @@ import (
 )
 
 const MAX_POPULATION = 10000
-const THREAD = 12
+const THREAD = 20
+
+// for safety
+const MIN_POPULATION_PER_BATCH = 20
 
 type Attributes []int
 
@@ -43,6 +46,44 @@ func Mutation(attributeConstraint *AttributeConstraint) []int {
 		Min := attributeConstraint.Ranges[idx].Min
 		Range := Max - Min
 		result[idx] = rand.Intn(Range+1) - Range/2
+		idx++
+	}
+	return result
+}
+
+func GreedyCrossover(attributeConstraint *AttributeConstraint, p1 Attributes, p2 Attributes, calcFitness FitnessFunction) []int {
+
+	var result = make(Attributes, attributeConstraint.Length)
+	idx := 0
+	// use p1 as base
+	for idx < attributeConstraint.Length {
+		result[idx] = p1[idx]
+		idx++
+	}
+
+	idx = 0
+	for idx < attributeConstraint.Length {
+
+		Max := attributeConstraint.Ranges[idx].Max
+		Min := attributeConstraint.Ranges[idx].Min
+
+		p1Base := Child{Score: 0, Attr: result, AttrLen: attributeConstraint.Length}
+		calcFitness(&p1Base)
+
+		result[idx] = p2[idx]
+		p2Base := Child{Score: 0, Attr: result, AttrLen: attributeConstraint.Length}
+		calcFitness(&p2Base)
+
+		if p1Base.Score > p2Base.Score {
+			// revert back to p1
+			result[idx] = p1[idx]
+		}
+		if result[idx] > Max {
+			result[idx] = Max
+		}
+		if result[idx] < Min {
+			result[idx] = Min
+		}
 		idx++
 	}
 	return result
@@ -85,8 +126,10 @@ func Crossover(attributeConstraint *AttributeConstraint, p1 Attributes, p2 Attri
 
 		// update probability values
 		if (idxShifter+idx)%update_parent_prob_interval == 0 {
-			parentProb = rand.Intn(100+parentProb) % 100
-			parentProb += mutationProb
+			// parentProb = rand.Intn(100+parentProb) % 100
+			// parentProb += mutationProb
+			parentProb += 50
+			parentProb %= 100
 		}
 		if (idxShifter+idx)%update_offset_prob_interval == 0 {
 			offsetProb = rand.Intn(100+offsetProb) % 100
@@ -110,6 +153,12 @@ func Crossover(attributeConstraint *AttributeConstraint, p1 Attributes, p2 Attri
 				result[idx] = p2[idx] + offset
 			}
 
+		}
+		if result[idx] > Max {
+			result[idx] = Max
+		}
+		if result[idx] < Min {
+			result[idx] = Min
 		}
 		idx++
 	}
@@ -136,7 +185,7 @@ func BreedPopulationClassic(attributeConstraint *AttributeConstraint, population
 	child := Child{Score: 0, Attr: Mutation(attributeConstraint)}
 	calcFitness(&child)
 	population = append(population, child)
-	offsetMultiplier := 5
+	offsetMultiplier := 10
 	if progress > 0.4 {
 		offsetMultiplier = 1
 	} else if progress > 0.3 {
@@ -153,7 +202,7 @@ func BreedPopulationClassic(attributeConstraint *AttributeConstraint, population
 				if idxA == idxB {
 					continue
 				}
-				child := Child{Score: 0, Attr: Crossover(attributeConstraint, a.Attr, b.Attr, 3, offsetMultiplier, 0)}
+				child := Child{Score: 0, Attr: Crossover(attributeConstraint, a.Attr, b.Attr, 3, offsetMultiplier, 0), AttrLen: attributeConstraint.Length}
 				calcFitness(&child)
 				populationNextGen = append(populationNextGen, child)
 			}
@@ -175,14 +224,18 @@ func BreedPopulationWorker(threadId int, attributeConstraint *AttributeConstrain
 
 	var populationNextGen []Child
 	var outputSize = MAX_POPULATION/THREAD + 1
-	offsetMultiplier := 5
+	if outputSize < MIN_POPULATION_PER_BATCH {
+		outputSize = MIN_POPULATION_PER_BATCH
+	}
+	offsetMultiplier := 10
 	if progress > 0.4 {
 		offsetMultiplier = 1
-	} else if progress > 0.3 {
-		offsetMultiplier = 2
 	} else if progress > 0.2 {
+		offsetMultiplier = 2
+	} else if progress > 0.1 {
 		offsetMultiplier = 3
 	}
+
 	var end = false
 	for !end {
 		for idxA, a := range *population {
@@ -194,7 +247,7 @@ func BreedPopulationWorker(threadId int, attributeConstraint *AttributeConstrain
 				if idxA == idxB {
 					continue
 				}
-				child := Child{Score: 0, Attr: Crossover(attributeConstraint, a.Attr, b.Attr, 3, offsetMultiplier, threadId)}
+				child := Child{Score: 0, Attr: Crossover(attributeConstraint, a.Attr, b.Attr, 3, offsetMultiplier, threadId), AttrLen: attributeConstraint.Length}
 				calcFitness(&child)
 				populationNextGen = append(populationNextGen, child)
 			}
@@ -214,21 +267,22 @@ func BreedPopulationWorker(threadId int, attributeConstraint *AttributeConstrain
 		return populationNextGen[i].Score > populationNextGen[j].Score
 	})
 
-	if len(populationNextGen) > 250 {
-		ch <- populationNextGen[0:250]
+	child1 := Child{Score: 0, Attr: GreedyCrossover(attributeConstraint, populationNextGen[0].Attr, populationNextGen[1].Attr, calcFitness), AttrLen: attributeConstraint.Length}
+	calcFitness(&child1)
+	populationNextGen[MIN_POPULATION_PER_BATCH-1] = child1
+
+	if len(populationNextGen) > 200 {
+		ch <- populationNextGen[0:200]
 	} else {
 		ch <- populationNextGen
 	}
+	// ch <- populationNextGen
 
 }
 
 func SpawnWorkers(thread int, progress float32, attributeConstraint *AttributeConstraint, population []Child, calcFitness FitnessFunction) []Child {
 	var wg sync.WaitGroup
 	ch := make(chan []Child, thread)
-
-	// child := Child{Score: 0, Attr: Mutation(attributeConstraint)}
-	// calcFitness(&child)
-	// population = append(population, child)
 
 	// prepare workers
 	for k := 0; k < thread; k++ {
@@ -251,7 +305,7 @@ func BreedPopulation(progress float32, attributeConstraint *AttributeConstraint,
 
 	var bound = 50 // only pick the top 50 in the population
 	populationNextGen := SpawnWorkers(THREAD, progress, attributeConstraint, population[0:bound], calcFitness)
-	//populationNextGen := BreedPopulationClassic(population[0:bound])
+	// populationNextGen := BreedPopulationClassic(attributeConstraint, population[0:bound], calcFitness, progress)
 
 	sort.Slice(populationNextGen, func(i, j int) bool {
 		return populationNextGen[i].Score > populationNextGen[j].Score

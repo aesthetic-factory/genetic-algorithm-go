@@ -19,22 +19,22 @@ func CalcScore(child *genetic.Child) {
 
 func main() {
 	var constraint genetic.AttributeConstraint
-	constraint.Length = 50
+	constraint.Length = 100
 	constraint.Ranges = make([]genetic.AttributeRange, constraint.Length)
 
 	idx := 0
 	for idx < constraint.Length {
 		if idx%2 == 0 {
-			constraint.Ranges[idx].Min = 0
+			constraint.Ranges[idx].Min = -500
 			constraint.Ranges[idx].Max = 1500
 		} else {
-			constraint.Ranges[idx].Min = -100
+			constraint.Ranges[idx].Min = -1000
 			constraint.Ranges[idx].Max = 0
 		}
 
 		idx++
 	}
-	success, population := genetic.Task(constraint, CalcScore, float64(constraint.Length)*9.97, 500)
+	success, population := genetic.Task(constraint, CalcScore, float64(constraint.Length)*9.95, 500)
 	if success {
 		fmt.Println("success")
 		for idx, val := range population {
